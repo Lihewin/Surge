@@ -115,14 +115,13 @@ jobs:
           path: |
             .cache
           key: ${{ runner.os }}-v3-${{ steps.date.outputs.year }}-${{ steps.date.outputs.month }}-${{ steps.date.outputs.day }} ${{ steps.date.outputs.hour }}:${{ steps.date.outputs.minute }}:${{ steps.date.outputs.second }}
-  compile_and_release:
+  
+  compile_srs:
     needs:
       - build
-    name: Compile JSON to SRS and Upload Release
+    name: Compile JSON to SRS
     if: github.ref == 'refs/heads/master'
     runs-on: ubuntu-24.04
-    permissions:
-      contents: write
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -164,12 +163,34 @@ jobs:
           # List compiled files
           echo "Compiled files:"
           ls -la output/ || echo "No files compiled"
+      - name: Upload SRS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: srs-files-${{ github.sha }}-${{ github.run_number }}
+          path: output
+          if-no-files-found: error
+          retention-days: 1
+  
+  release_github:
+    needs:
+      - compile_srs
+    name: Upload to GitHub Release
+    if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Download SRS files
+        uses: actions/download-artifact@v4
+        with:
+          name: srs-files-${{ github.sha }}-${{ github.run_number }}
+          path: output
       - name: Set timestamp tag
         id: set_tag
         run: |
           TAG=$(date +'%Y%m%d%H%M%S')
           echo "TAG=${TAG}" >> $GITHUB_OUTPUT
-      - name: Upload binaries to release
+      - name: Upload binaries to timestamped release
         uses: svenstaro/upload-release-action@v2
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
@@ -185,7 +206,20 @@ jobs:
           tag: latest
           overwrite: true
           file_glob: true
-      - name: Upload SRS files to Cloudflare R2
+  
+  upload_r2:
+    needs:
+      - compile_srs
+    name: Upload to Cloudflare R2
+    if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Download SRS files
+        uses: actions/download-artifact@v4
+        with:
+          name: srs-files-${{ github.sha }}-${{ github.run_number }}
+          path: output
+      - name: Upload to R2
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
@@ -225,16 +259,35 @@ jobs:
           else
             echo "No SRS files found to upload"
           fi
+  
+  upload_ui:
+    name: Upload Zashboard UI to R2
+    if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Download and Upload Zashboard UI
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+        run: |
+          # Verify AWS CLI is available
+          aws --version
           
-          # Download and upload Zashboard UI
+          # Download Zashboard UI
           echo "Downloading Zashboard UI..."
           curl -L "https://github.com/Zephyruso/zashboard/releases/download/v2.3.0/dist-no-fonts.zip" -o "controller-ui-dist.zip"
           
+          # Upload to R2
           echo "Uploading Zashboard UI to R2..."
           aws s3 cp "controller-ui-dist.zip" "s3://${R2_BUCKET}/controller-ui/dist.zip" \
             --endpoint-url "${R2_ENDPOINT}" \
             --content-type "application/zip" \
             --cache-control "public, max-age=86400" \
             --metadata-directive REPLACE
+          
+          echo "✅ Zashboard UI uploaded successfully!"
           
           echo "✅ Zashboard UI uploaded successfully!"

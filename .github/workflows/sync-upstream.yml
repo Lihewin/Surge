@@ -1,0 +1,68 @@
+name: Sync Upstream
+
+on:
+  schedule:
+    - cron: '0 7 * * *'   
+    - cron: '0 18 * * *'  
+  workflow_dispatch:
+
+jobs:
+  sync:
+    name: Sync from Upstream
+    runs-on: ubuntu-24.04
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+      
+      - name: Add upstream remote
+        run: |
+          if ! git remote | grep -q '^upstream$'; then
+            git remote add upstream https://github.com/SukkaW/Surge.git
+            echo "✅ Added upstream remote"
+          else
+            echo "ℹ️ Upstream remote already exists"
+          fi
+          git remote -v
+      
+      - name: Fetch upstream changes
+        run: |
+          echo "Fetching from upstream..."
+          git fetch upstream
+          git fetch origin
+      
+      - name: Merge upstream changes
+        run: |
+          echo "Current branch: $(git branch --show-current)"
+          echo "Merging upstream/master into master..."
+          
+          if git merge upstream/master --no-edit; then
+            echo "✅ Merge successful"
+          else
+            echo "⚠️ Merge conflict detected"
+            git status
+            exit 1
+          fi
+      
+      - name: Push changes
+        run: |
+          echo "Pushing changes to origin..."
+          git push origin master
+          echo "✅ Sync completed successfully!"
+      
+      - name: Create sync report
+        if: success()
+        run: |
+          echo "📊 Sync Report"
+          echo "=============="
+          echo "Synced at: $(date)"
+          echo "Latest commit:"
+          git log -1 --oneline
