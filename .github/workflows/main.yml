@@ -120,7 +120,7 @@ jobs:
       - build
     name: Compile JSON to SRS and Upload Release
     if: github.ref == 'refs/heads/master'
-    runs-on: ubuntu-24.04-arm
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:
@@ -193,9 +193,11 @@ jobs:
           R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
           R2_BUCKET: ${{ secrets.R2_BUCKET }}
         run: |
-          # Install AWS CLI
-          sudo apt-get update
-          sudo apt-get install -y awscli
+          # Install AWS CLI v2 for x86_64
+          curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+          unzip -q awscliv2.zip
+          sudo ./aws/install
+          aws --version
           
           # Clear old SRS files from R2 first (optional, ensures clean state)
           echo "Cleaning old SRS files from R2..."
