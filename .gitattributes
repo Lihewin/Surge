@@ -1,0 +1,2 @@
+# Keep local changes to GitHub Actions workflow during fork sync
+.github/workflows/main.yml merge=ours
