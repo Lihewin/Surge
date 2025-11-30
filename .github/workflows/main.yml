@@ -225,3 +225,16 @@ jobs:
           else
             echo "No SRS files found to upload"
           fi
+          
+          # Download and upload Zashboard UI
+          echo "Downloading Zashboard UI..."
+          curl -L "https://github.com/Zephyruso/zashboard/releases/download/v2.3.0/dist-no-fonts.zip" -o "controller-ui-dist.zip"
+          
+          echo "Uploading Zashboard UI to R2..."
+          aws s3 cp "controller-ui-dist.zip" "s3://${R2_BUCKET}/controller-ui/dist.zip" \
+            --endpoint-url "${R2_ENDPOINT}" \
+            --content-type "application/zip" \
+            --cache-control "public, max-age=86400" \
+            --metadata-directive REPLACE
+          
+          echo "✅ Zashboard UI uploaded successfully!"
