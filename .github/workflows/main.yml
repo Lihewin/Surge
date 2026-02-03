@@ -5,6 +5,9 @@ on:
       - master
   pull_request:
   workflow_dispatch:
+  schedule:
+    - cron: '30 6 * * *'  # 增加定时任务，稍晚于 sync-upstream
+    - cron: '30 17 * * *'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -13,33 +16,34 @@ concurrency:
 jobs:
   build:
     name: Build
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-24.04-arm
 
     steps:
-      # - name: Tune GitHub-hosted runner network
-      #   # https://github.com/actions/runner-images/issues/1187
-      #   uses: smorimoto/tune-github-hosted-runner-network@v1
-      - uses: actions/checkout@v4
+      - uses: smorimoto/tune-github-hosted-runner-network@v1
+        # https://github.com/actions/runner-images/issues/1187
+      - uses: actions/checkout@v5
         with:
           persist-credentials: false
       - uses: pnpm/action-setup@v4
         with:
           run_install: false
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version-file: ".node-version"
           cache: "pnpm"
-      - name: Download Previous Build
-        uses: actions/checkout@v4
-        with:
-          repository: SukkaLab/ruleset.skk.moe
-          persist-credentials: false
-          path: previous-build-${{ github.run_id }}-${{ github.run_number }}
-          token: ${{ secrets.GIT_TOKEN }}
       - name: Grab Building Folder
         id: ramdisk
         run: |
           echo "build_dir=previous-build-${{ github.run_id }}-${{ github.run_number }}" >> $GITHUB_OUTPUT
+      - name: Download Previous Build
+        uses: actions/checkout@v5
+        with:
+          repository: SukkaLab/ruleset.skk.moe
+          persist-credentials: false
+          filter: "tree:0" # we don't care about git history here
+          fetch-tags: false
+          path: ${{ steps.ramdisk.outputs.build_dir }}
+          token: ${{ secrets.GIT_TOKEN }}
       - name: Setup build folder
         run: |
           if [ ! -d ${{ steps.ramdisk.outputs.build_dir }}/.git ]; then
@@ -113,13 +117,33 @@ jobs:
           path: |
             .cache
           key: ${{ runner.os }}-v3-${{ steps.date.outputs.year }}-${{ steps.date.outputs.month }}-${{ steps.date.outputs.day }} ${{ steps.date.outputs.hour }}:${{ steps.date.outputs.minute }}:${{ steps.date.outputs.second }}
+
+  diff_deployment_on_pr:
+    if: github.ref != 'refs/heads/master'
+    needs:
+      - build
+    name: Diff output
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: build-artifact-${{ github.sha }}-${{ github.run_number }}
+          path: public
+      - name: Diff
+        run: |
+          git clone --filter=tree:0 --no-tags https://github.com/SukkaLab/ruleset.skk.moe.git ./deploy-git >/dev/null 2>&1
+          cd ./deploy-git
+          git fetch origin master >/dev/null 2>&1
+          rm -rf ./*
+          cp -rf ../public/* ./
+          git --no-pager diff --minimal
   
   compile_srs:
     needs:
       - build
     name: Compile JSON to SRS
     if: github.ref == 'refs/heads/master'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -174,7 +198,7 @@ jobs:
       - compile_srs
     name: Upload to GitHub Release
     if: github.ref == 'refs/heads/master'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
@@ -210,7 +234,7 @@ jobs:
       - compile_srs
     name: Upload to Cloudflare R2
     if: github.ref == 'refs/heads/master'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     steps:
       - name: Download SRS files
         uses: actions/download-artifact@v4
@@ -261,7 +285,7 @@ jobs:
   upload_ui:
     name: Upload Zashboard UI to R2
     if: github.ref == 'refs/heads/master'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     steps:
       - name: Download and Upload Zashboard UI
         env:
@@ -287,5 +311,19 @@ jobs:
             --metadata-directive REPLACE
           
           echo "✅ Zashboard UI uploaded successfully!"
-          
-          echo "✅ Zashboard UI uploaded successfully!"
+
+  remove_artifacts:
+    needs:
+      - build
+      - compile_srs
+      - release_github
+      - upload_r2
+    name: Remove Artifacts after Deployment
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - uses: geekyeggo/delete-artifact@v5
+        with:
+          name: |
+            build-artifact-${{ github.sha }}-${{ github.run_number }}
+            srs-files-${{ github.sha }}-${{ github.run_number }}
