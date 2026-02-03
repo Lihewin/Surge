@@ -138,40 +138,6 @@ jobs:
           cp -rf ../public/* ./
           git --no-pager diff --minimal
 
-  deploy_to_cloudflare_pages:
-    needs:
-      - build
-    name: Deploy to Cloudflare Pages
-    if: github.ref == 'refs/heads/master'
-    runs-on: ubuntu-slim
-    # matrix is a tricky way to define a variable directly in the action yaml
-    strategy:
-      matrix:
-        wranglerVersion: ['3.114.12']
-    steps:
-      - name: Get NPM cache directory path
-        id: npm_cache_path
-        shell: sh
-        run: echo dir=$(npm config get cache) >> $GITHUB_OUTPUT
-      - uses: actions/cache@v4
-        with:
-          path: |
-            ${{ steps.npm_cache_path.outputs.dir }}
-            node_modules
-          key: deploy-to-cloudflare-npm-${{ runner.os }}-${{ runner.arch }}-wrangler-${{ matrix.wranglerVersion }}
-          restore-keys: |
-            deploy-to-cloudflare-npm-${{ runner.os }}-${{ runner.arch }}-wrangler-
-      - uses: actions/download-artifact@v4
-        with:
-          name: build-artifact-${{ github.sha }}-${{ github.run_number }}
-          path: public
-      - uses: cloudflare/wrangler-action@v3
-        with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: pages deploy public --project-name=sukkaw-ruleset --commit-dirty=true --branch=main
-          wranglerVersion: ${{ matrix.wranglerVersion }}
-
   deploy_to_github_gitlab:
     needs:
       - build
@@ -300,22 +266,21 @@ jobs:
         run: |
           TAG=$(date +'%Y%m%d%H%M%S')
           echo "TAG=${TAG}" >> $GITHUB_OUTPUT
-      - name: Upload binaries to timestamped release
-        uses: svenstaro/upload-release-action@v2
+      - name: Create Release and Upload Assets
+        uses: softprops/action-gh-release@v2
         with:
-          repo_token: ${{ secrets.GITHUB_TOKEN }}
-          file: output/*.srs
-          tag: ${{ steps.set_tag.outputs.TAG }}
-          overwrite: true
-          file_glob: true
-      - name: Upload binaries to latest release
-        uses: svenstaro/upload-release-action@v2
+          files: output/*.srs
+          tag_name: ${{ steps.set_tag.outputs.TAG }}
+          name: Release ${{ steps.set_tag.outputs.TAG }}
+          generate_release_notes: true
+      - name: Update Latest Release
+        uses: softprops/action-gh-release@v2
         with:
-          repo_token: ${{ secrets.GITHUB_TOKEN }}
-          file: output/*.srs
-          tag: latest
-          overwrite: true
-          file_glob: true
+          files: output/*.srs
+          tag_name: latest
+          name: Latest Release
+          prerelease: false
+          make_latest: true
   
   upload_r2:
     needs:
@@ -329,7 +294,7 @@ jobs:
         with:
           name: srs-files-${{ github.sha }}-${{ github.run_number }}
           path: output
-      - name: Upload to R2
+      - name: Sync to R2
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
@@ -337,38 +302,16 @@ jobs:
           R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
           R2_BUCKET: ${{ secrets.R2_BUCKET }}
         run: |
-          # Verify AWS CLI is available
-          aws --version
-          
-          # Clear old SRS files from R2 first (optional, ensures clean state)
-          echo "Cleaning old SRS files from R2..."
-          aws s3 rm "s3://${R2_BUCKET}/srs/" \
-            --recursive \
+          # Use s3 sync for high efficiency (diff-only upload)
+          aws s3 sync output/ "s3://${R2_BUCKET}/srs/" \
             --endpoint-url "${R2_ENDPOINT}" \
+            --delete \
             --exclude "*" \
-            --include "*.srs" || echo "No existing files to remove or error occurred"
+            --include "*.srs" \
+            --content-type "application/octet-stream" \
+            --cache-control "public, max-age=3600"
           
-          # Upload all SRS files to R2 with explicit overwrite
-          if [ -d "output" ] && [ "$(ls -A output/*.srs 2>/dev/null)" ]; then
-            echo "Uploading SRS files to Cloudflare R2..."
-            for srs_file in output/*.srs; do
-              file_name=$(basename "$srs_file")
-              echo "Uploading: $file_name (will overwrite if exists)"
-              aws s3 cp "$srs_file" "s3://${R2_BUCKET}/srs/${file_name}" \
-                --endpoint-url "${R2_ENDPOINT}" \
-                --content-type "application/octet-stream" \
-                --cache-control "public, max-age=3600" \
-                --metadata-directive REPLACE
-            done
-            echo "✅ Upload completed! All files have been uploaded/overwritten."
-            
-            # List uploaded files for verification
-            echo "Verifying uploaded files:"
-            aws s3 ls "s3://${R2_BUCKET}/srs/" \
-              --endpoint-url "${R2_ENDPOINT}"
-          else
-            echo "No SRS files found to upload"
-          fi
+          echo "✅ R2 Sync completed!"
   
   upload_ui:
     name: Upload Zashboard UI to R2
@@ -403,7 +346,6 @@ jobs:
 
   remove_artifacts:
     needs:
-      - deploy_to_cloudflare_pages
       - deploy_to_github_gitlab
       - compile_srs
       - release_github
