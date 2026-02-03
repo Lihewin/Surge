@@ -4,6 +4,7 @@ on:
     branches:
       - master
   pull_request:
+  workflow_dispatch:
   schedule:
     - cron: '0 5 * * *'  # Runs at 05:00 UTC
     - cron: '0 17 * * *' # Runs at 1:00 UTC
@@ -224,13 +225,196 @@ jobs:
           GH_EMAIL: ${{ secrets.GIT_EMAIL }}
           GH_USER: ${{ secrets.GIT_USER }}
           GH_TOKEN: ${{ secrets.GIT_TOKEN }}
+  
+  compile_srs:
+    needs:
+      - build
+    name: Compile JSON to SRS
+    if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: build-artifact-${{ github.sha }}-${{ github.run_number }}
+          path: public
+      - name: Install sing-box
+        run: |
+          sudo mkdir -p /etc/apt/keyrings
+          sudo curl -fsSL https://sing-box.app/gpg.key -o /etc/apt/keyrings/sagernet.asc
+          sudo chmod a+r /etc/apt/keyrings/sagernet.asc
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/sagernet.asc] https://deb.sagernet.org/ * *" | \
+            sudo tee /etc/apt/sources.list.d/sagernet.list > /dev/null
+          sudo apt-get update
+          sudo apt-get install -y sing-box
+      - name: Compile JSON to SRS
+        run: |
+          mkdir -p output
+          # Check if sing-box directory exists
+          if [ ! -d "public/sing-box" ]; then
+            echo "Warning: sing-box directory not found, skipping compilation"
+            exit 0
+          fi
+          
+          # Compile all JSON files in sing-box directory
+          for rule_type in domainset non_ip ip; do
+            if [ -d "public/sing-box/${rule_type}" ]; then
+              echo "Processing ${rule_type} rules..."
+              find "public/sing-box/${rule_type}" -type f -name "*.json" | while read -r json_file; do
+                file_name=$(basename "$json_file" .json)
+                output_file="output/${rule_type}_${file_name}.srs"
+                echo "Compiling: $json_file -> $output_file"
+                sing-box rule-set compile "$json_file" -o "$output_file"
+              done
+            else
+              echo "Directory public/sing-box/${rule_type} not found, skipping..."
+            fi
+          done
+          
+          # List compiled files
+          echo "Compiled files:"
+          ls -la output/ || echo "No files compiled"
+      - name: Upload SRS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: srs-files-${{ github.sha }}-${{ github.run_number }}
+          path: output
+          if-no-files-found: error
+          retention-days: 1
+  
+  release_github:
+    needs:
+      - compile_srs
+    name: Upload to GitHub Release
+    if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download SRS files
+        uses: actions/download-artifact@v4
+        with:
+          name: srs-files-${{ github.sha }}-${{ github.run_number }}
+          path: output
+      - name: Set timestamp tag
+        id: set_tag
+        run: |
+          TAG=$(date +'%Y%m%d%H%M%S')
+          echo "TAG=${TAG}" >> $GITHUB_OUTPUT
+      - name: Upload binaries to timestamped release
+        uses: svenstaro/upload-release-action@v2
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          file: output/*.srs
+          tag: ${{ steps.set_tag.outputs.TAG }}
+          overwrite: true
+          file_glob: true
+      - name: Upload binaries to latest release
+        uses: svenstaro/upload-release-action@v2
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          file: output/*.srs
+          tag: latest
+          overwrite: true
+          file_glob: true
+  
+  upload_r2:
+    needs:
+      - compile_srs
+    name: Upload to Cloudflare R2
+    if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download SRS files
+        uses: actions/download-artifact@v4
+        with:
+          name: srs-files-${{ github.sha }}-${{ github.run_number }}
+          path: output
+      - name: Upload to R2
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+        run: |
+          # Verify AWS CLI is available
+          aws --version
+          
+          # Clear old SRS files from R2 first (optional, ensures clean state)
+          echo "Cleaning old SRS files from R2..."
+          aws s3 rm "s3://${R2_BUCKET}/srs/" \
+            --recursive \
+            --endpoint-url "${R2_ENDPOINT}" \
+            --exclude "*" \
+            --include "*.srs" || echo "No existing files to remove or error occurred"
+          
+          # Upload all SRS files to R2 with explicit overwrite
+          if [ -d "output" ] && [ "$(ls -A output/*.srs 2>/dev/null)" ]; then
+            echo "Uploading SRS files to Cloudflare R2..."
+            for srs_file in output/*.srs; do
+              file_name=$(basename "$srs_file")
+              echo "Uploading: $file_name (will overwrite if exists)"
+              aws s3 cp "$srs_file" "s3://${R2_BUCKET}/srs/${file_name}" \
+                --endpoint-url "${R2_ENDPOINT}" \
+                --content-type "application/octet-stream" \
+                --cache-control "public, max-age=3600" \
+                --metadata-directive REPLACE
+            done
+            echo "✅ Upload completed! All files have been uploaded/overwritten."
+            
+            # List uploaded files for verification
+            echo "Verifying uploaded files:"
+            aws s3 ls "s3://${R2_BUCKET}/srs/" \
+              --endpoint-url "${R2_ENDPOINT}"
+          else
+            echo "No SRS files found to upload"
+          fi
+  
+  upload_ui:
+    name: Upload Zashboard UI to R2
+    needs: build
+    if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download and Upload Zashboard UI
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+        run: |
+          # Verify AWS CLI is available
+          aws --version
+          
+          # Download Zashboard UI
+          echo "Downloading Zashboard UI..."
+          curl -L "https://github.com/Zephyruso/zashboard/releases/download/v2.3.0/dist-no-fonts.zip" -o "controller-ui-dist.zip"
+          
+          # Upload to R2
+          echo "Uploading Zashboard UI to R2..."
+          aws s3 cp "controller-ui-dist.zip" "s3://${R2_BUCKET}/controller-ui/dist.zip" \
+            --endpoint-url "${R2_ENDPOINT}" \
+            --content-type "application/zip" \
+            --cache-control "public, max-age=86400" \
+            --metadata-directive REPLACE
+          
+          echo "✅ Zashboard UI uploaded successfully!"
+
   remove_artifacts:
     needs:
       - deploy_to_cloudflare_pages
       - deploy_to_github_gitlab
+      - compile_srs
+      - release_github
+      - upload_r2
+      - upload_ui
     name: Remove Artifacts after Deployment
     runs-on: ubuntu-slim
+    if: always()
     steps:
       - uses: geekyeggo/delete-artifact@v5
         with:
-          name: build-artifact-${{ github.sha }}-${{ github.run_number }}
+          name: |
+            build-artifact-${{ github.sha }}-${{ github.run_number }}
+            srs-files-${{ github.sha }}-${{ github.run_number }}

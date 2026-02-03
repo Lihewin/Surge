@@ -130,7 +130,8 @@ const pool = new Worktank({
         const __require = module.createRequire(__filename);
 
         const picocolors = __require('picocolors') as typeof import('picocolors');
-        const { '~fetch': fetch } = __require('./fetch-retry') as typeof import('./fetch-retry');
+        const fetchRetry = __require('./fetch-retry');
+        const fetch = fetchRetry.$$fetch || fetchRetry['~fetch'] || fetchRetry.default?.$$fetch || fetchRetry.default?.['~fetch'];
 
         const dns = __require('node:dns/promises') as typeof import('node:dns/promises');
 
