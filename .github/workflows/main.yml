@@ -4,10 +4,9 @@ on:
     branches:
       - master
   pull_request:
-  workflow_dispatch:
   schedule:
-    - cron: '30 6 * * *'  # 增加定时任务，稍晚于 sync-upstream
-    - cron: '30 17 * * *'
+    - cron: '0 5 * * *'  # Runs at 05:00 UTC
+    - cron: '0 17 * * *' # Runs at 1:00 UTC
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -43,7 +42,6 @@ jobs:
           filter: "tree:0" # we don't care about git history here
           fetch-tags: false
           path: ${{ steps.ramdisk.outputs.build_dir }}
-          token: ${{ secrets.GIT_TOKEN }}
       - name: Setup build folder
         run: |
           if [ ! -d ${{ steps.ramdisk.outputs.build_dir }}/.git ]; then
@@ -51,6 +49,7 @@ jobs:
             exit 1
           fi
           rm -rf "${{ steps.ramdisk.outputs.build_dir }}/.git"
+
           if [ ! -d ${{ steps.ramdisk.outputs.build_dir }}/List ]; then
             echo "List not found"
             exit 1
@@ -123,7 +122,7 @@ jobs:
     needs:
       - build
     name: Diff output
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -137,193 +136,101 @@ jobs:
           rm -rf ./*
           cp -rf ../public/* ./
           git --no-pager diff --minimal
-  
-  compile_srs:
+
+  deploy_to_cloudflare_pages:
     needs:
       - build
-    name: Compile JSON to SRS
+    name: Deploy to Cloudflare Pages
     if: github.ref == 'refs/heads/master'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
+    # matrix is a tricky way to define a variable directly in the action yaml
+    strategy:
+      matrix:
+        wranglerVersion: ['3.114.12']
+    steps:
+      - name: Get NPM cache directory path
+        id: npm_cache_path
+        shell: sh
+        run: echo dir=$(npm config get cache) >> $GITHUB_OUTPUT
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ${{ steps.npm_cache_path.outputs.dir }}
+            node_modules
+          key: deploy-to-cloudflare-npm-${{ runner.os }}-${{ runner.arch }}-wrangler-${{ matrix.wranglerVersion }}
+          restore-keys: |
+            deploy-to-cloudflare-npm-${{ runner.os }}-${{ runner.arch }}-wrangler-
+      - uses: actions/download-artifact@v4
+        with:
+          name: build-artifact-${{ github.sha }}-${{ github.run_number }}
+          path: public
+      - uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy public --project-name=sukkaw-ruleset --commit-dirty=true --branch=main
+          wranglerVersion: ${{ matrix.wranglerVersion }}
+
+  deploy_to_github_gitlab:
+    needs:
+      - build
+    name: Deploy to GitHub and GitLab
+    if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-slim
     steps:
       - uses: actions/download-artifact@v4
         with:
           name: build-artifact-${{ github.sha }}-${{ github.run_number }}
           path: public
-      - name: Install sing-box
+      - name: Upload Dist to GitLab
+        continue-on-error: true
         run: |
-          sudo mkdir -p /etc/apt/keyrings
-          sudo curl -fsSL https://sing-box.app/gpg.key -o /etc/apt/keyrings/sagernet.asc
-          sudo chmod a+r /etc/apt/keyrings/sagernet.asc
-          echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/sagernet.asc] https://deb.sagernet.org/ * *" | \
-            sudo tee /etc/apt/sources.list.d/sagernet.list > /dev/null
-          sudo apt-get update
-          sudo apt-get install -y sing-box
-      - name: Compile JSON to SRS
-        run: |
-          mkdir -p output
-          # Check if sing-box directory exists
-          if [ ! -d "public/sing-box" ]; then
-            echo "Warning: sing-box directory not found, skipping compilation"
-            exit 0
-          fi
-          
-          # Compile all JSON files in sing-box directory
-          for rule_type in domainset non_ip ip; do
-            if [ -d "public/sing-box/${rule_type}" ]; then
-              echo "Processing ${rule_type} rules..."
-              find "public/sing-box/${rule_type}" -type f -name "*.json" | while read -r json_file; do
-                file_name=$(basename "$json_file" .json)
-                output_file="output/${rule_type}_${file_name}.srs"
-                echo "Compiling: $json_file -> $output_file"
-                sing-box rule-set compile "$json_file" -o "$output_file"
-              done
-            else
-              echo "Directory public/sing-box/${rule_type} not found, skipping..."
-            fi
-          done
-          
-          # List compiled files
-          echo "Compiled files:"
-          ls -la output/ || echo "No files compiled"
-      - name: Upload SRS artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: srs-files-${{ github.sha }}-${{ github.run_number }}
-          path: output
-          if-no-files-found: error
-          retention-days: 1
-  
-  release_github:
-    needs:
-      - compile_srs
-    name: Upload to GitHub Release
-    if: github.ref == 'refs/heads/master'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - name: Download SRS files
-        uses: actions/download-artifact@v4
-        with:
-          name: srs-files-${{ github.sha }}-${{ github.run_number }}
-          path: output
-      - name: Set timestamp tag
-        id: set_tag
-        run: |
-          TAG=$(date +'%Y%m%d%H%M%S')
-          echo "TAG=${TAG}" >> $GITHUB_OUTPUT
-      - name: Upload binaries to timestamped release
-        uses: svenstaro/upload-release-action@v2
-        with:
-          repo_token: ${{ secrets.GITHUB_TOKEN }}
-          file: output/*.srs
-          tag: ${{ steps.set_tag.outputs.TAG }}
-          overwrite: true
-          file_glob: true
-      - name: Upload binaries to latest release
-        uses: svenstaro/upload-release-action@v2
-        with:
-          repo_token: ${{ secrets.GITHUB_TOKEN }}
-          file: output/*.srs
-          tag: latest
-          overwrite: true
-          file_glob: true
-  
-  upload_r2:
-    needs:
-      - compile_srs
-    name: Upload to Cloudflare R2
-    if: github.ref == 'refs/heads/master'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Download SRS files
-        uses: actions/download-artifact@v4
-        with:
-          name: srs-files-${{ github.sha }}-${{ github.run_number }}
-          path: output
-      - name: Upload to R2
+          git clone --filter=tree:0 --no-tags https://${GITLAB_TOKEN_NAME}:${GITLAB_TOKEN}@gitlab.com/SukkaW/ruleset.skk.moe.git ./deploy-git
+          cd ./deploy-git
+          git config --global push.dgefault matching
+          git config --global user.email "${GITLAB_EMAIL}"
+          git config --global user.name "${GITLAB_USER}"
+          rm -rf ./*
+          cp -rf ../public/* ./
+          git add --all .
+          git commit -m "deploy: https://github.com/SukkaW/Surge/commit/${GITHUB_SHA}"
+          git push --quiet --force origin HEAD:master
+          cd ..
+          rm -rf ./deploy-git
         env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: auto
-          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
-          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+          GITLAB_EMAIL: ${{ secrets.GITLAB_EMAIL }}
+          GITLAB_USER: ${{ secrets.GITLAB_USER }}
+          GITLAB_TOKEN_NAME: ${{ secrets.GITLAB_TOKEN_NAME }}
+          GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
+      - name: Upload Dist to GitHub
+        continue-on-error: true
         run: |
-          # Verify AWS CLI is available
-          aws --version
-          
-          # Clear old SRS files from R2 first (optional, ensures clean state)
-          echo "Cleaning old SRS files from R2..."
-          aws s3 rm "s3://${R2_BUCKET}/srs/" \
-            --recursive \
-            --endpoint-url "${R2_ENDPOINT}" \
-            --exclude "*" \
-            --include "*.srs" || echo "No existing files to remove or error occurred"
-          
-          # Upload all SRS files to R2 with explicit overwrite
-          if [ -d "output" ] && [ "$(ls -A output/*.srs 2>/dev/null)" ]; then
-            echo "Uploading SRS files to Cloudflare R2..."
-            for srs_file in output/*.srs; do
-              file_name=$(basename "$srs_file")
-              echo "Uploading: $file_name (will overwrite if exists)"
-              aws s3 cp "$srs_file" "s3://${R2_BUCKET}/srs/${file_name}" \
-                --endpoint-url "${R2_ENDPOINT}" \
-                --content-type "application/octet-stream" \
-                --cache-control "public, max-age=3600" \
-                --metadata-directive REPLACE
-            done
-            echo "✅ Upload completed! All files have been uploaded/overwritten."
-            
-            # List uploaded files for verification
-            echo "Verifying uploaded files:"
-            aws s3 ls "s3://${R2_BUCKET}/srs/" \
-              --endpoint-url "${R2_ENDPOINT}"
-          else
-            echo "No SRS files found to upload"
-          fi
-  
-  upload_ui:
-    name: Upload Zashboard UI to R2
-    if: github.ref == 'refs/heads/master'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Download and Upload Zashboard UI
+          gh repo unarchive SukkaLab/ruleset.skk.moe --yes
+          git clone --filter=tree:0 --no-tags https://${GH_USER}:${GH_TOKEN}@github.com/SukkaLab/ruleset.skk.moe.git ./deploy-git
+          cd ./deploy-git
+          git config --global push.default matching
+          git config --global user.email "${GH_EMAIL}"
+          git config --global user.name "${GH_USER}"
+          rm -rf ./*
+          cp -rf ../public/* ./
+          echo "ruleset-mirror.skk.moe" > CNAME
+          git add --all .
+          git commit -m "deploy: https://github.com/SukkaW/Surge/commit/${GITHUB_SHA}"
+          git push --quiet --force origin HEAD:master
+          cd ..
+          rm -rf ./deploy-git
+          gh repo archive SukkaLab/ruleset.skk.moe --yes
         env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: auto
-          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
-          R2_BUCKET: ${{ secrets.R2_BUCKET }}
-        run: |
-          # Verify AWS CLI is available
-          aws --version
-          
-          # Download Zashboard UI
-          echo "Downloading Zashboard UI..."
-          curl -L "https://github.com/Zephyruso/zashboard/releases/download/v2.3.0/dist-no-fonts.zip" -o "controller-ui-dist.zip"
-          
-          # Upload to R2
-          echo "Uploading Zashboard UI to R2..."
-          aws s3 cp "controller-ui-dist.zip" "s3://${R2_BUCKET}/controller-ui/dist.zip" \
-            --endpoint-url "${R2_ENDPOINT}" \
-            --content-type "application/zip" \
-            --cache-control "public, max-age=86400" \
-            --metadata-directive REPLACE
-          
-          echo "✅ Zashboard UI uploaded successfully!"
-
+          GH_EMAIL: ${{ secrets.GIT_EMAIL }}
+          GH_USER: ${{ secrets.GIT_USER }}
+          GH_TOKEN: ${{ secrets.GIT_TOKEN }}
   remove_artifacts:
     needs:
-      - build
-      - compile_srs
-      - release_github
-      - upload_r2
+      - deploy_to_cloudflare_pages
+      - deploy_to_github_gitlab
     name: Remove Artifacts after Deployment
-    runs-on: ubuntu-latest
-    if: always()
+    runs-on: ubuntu-slim
     steps:
       - uses: geekyeggo/delete-artifact@v5
         with:
-          name: |
-            build-artifact-${{ github.sha }}-${{ github.run_number }}
-            srs-files-${{ github.sha }}-${{ github.run_number }}
+          name: build-artifact-${{ github.sha }}-${{ github.run_number }}
