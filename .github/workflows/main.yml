@@ -17,6 +17,7 @@ jobs:
   build:
     name: Build
     runs-on: ubuntu-24.04-arm
+    steps:
       - uses: smorimoto/tune-github-hosted-runner-network@v1
         # https://github.com/actions/runner-images/issues/1187
       - uses: actions/checkout@v5
@@ -275,7 +276,7 @@ jobs:
       - upload_r2
       - upload_ui
     name: Remove Artifacts after Deployment
-    runs-on: ubuntu-slim
+    runs-on: ubuntu-latest
     if: always()
     steps:
       - uses: geekyeggo/delete-artifact@v5
