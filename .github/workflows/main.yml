@@ -17,8 +17,6 @@ jobs:
   build:
     name: Build
     runs-on: ubuntu-24.04-arm
-
-    steps:
       - uses: smorimoto/tune-github-hosted-runner-network@v1
         # https://github.com/actions/runner-images/issues/1187
       - uses: actions/checkout@v5
@@ -117,26 +115,6 @@ jobs:
           path: |
             .cache
           key: ${{ runner.os }}-v3-${{ steps.date.outputs.year }}-${{ steps.date.outputs.month }}-${{ steps.date.outputs.day }} ${{ steps.date.outputs.hour }}:${{ steps.date.outputs.minute }}:${{ steps.date.outputs.second }}
-
-  diff_deployment_on_pr:
-    if: github.ref != 'refs/heads/master'
-    needs:
-      - build
-    name: Diff output
-    runs-on: ubuntu-slim
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          name: build-artifact-${{ github.sha }}-${{ github.run_number }}
-          path: public
-      - name: Diff
-        run: |
-          git clone --filter=tree:0 --no-tags https://github.com/SukkaLab/ruleset.skk.moe.git ./deploy-git >/dev/null 2>&1
-          cd ./deploy-git
-          git fetch origin master >/dev/null 2>&1
-          rm -rf ./*
-          cp -rf ../public/* ./
-          git --no-pager diff --minimal
 
   compile_srs:
     needs:
