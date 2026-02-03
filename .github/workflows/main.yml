@@ -138,60 +138,6 @@ jobs:
           cp -rf ../public/* ./
           git --no-pager diff --minimal
 
-  deploy_to_github_gitlab:
-    needs:
-      - build
-    name: Deploy to GitHub and GitLab
-    if: github.ref == 'refs/heads/master'
-    runs-on: ubuntu-slim
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          name: build-artifact-${{ github.sha }}-${{ github.run_number }}
-          path: public
-      - name: Upload Dist to GitLab
-        continue-on-error: true
-        run: |
-          git clone --filter=tree:0 --no-tags https://${GITLAB_TOKEN_NAME}:${GITLAB_TOKEN}@gitlab.com/SukkaW/ruleset.skk.moe.git ./deploy-git
-          cd ./deploy-git
-          git config --global push.dgefault matching
-          git config --global user.email "${GITLAB_EMAIL}"
-          git config --global user.name "${GITLAB_USER}"
-          rm -rf ./*
-          cp -rf ../public/* ./
-          git add --all .
-          git commit -m "deploy: https://github.com/SukkaW/Surge/commit/${GITHUB_SHA}"
-          git push --quiet --force origin HEAD:master
-          cd ..
-          rm -rf ./deploy-git
-        env:
-          GITLAB_EMAIL: ${{ secrets.GITLAB_EMAIL }}
-          GITLAB_USER: ${{ secrets.GITLAB_USER }}
-          GITLAB_TOKEN_NAME: ${{ secrets.GITLAB_TOKEN_NAME }}
-          GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
-      - name: Upload Dist to GitHub
-        continue-on-error: true
-        run: |
-          gh repo unarchive SukkaLab/ruleset.skk.moe --yes
-          git clone --filter=tree:0 --no-tags https://${GH_USER}:${GH_TOKEN}@github.com/SukkaLab/ruleset.skk.moe.git ./deploy-git
-          cd ./deploy-git
-          git config --global push.default matching
-          git config --global user.email "${GH_EMAIL}"
-          git config --global user.name "${GH_USER}"
-          rm -rf ./*
-          cp -rf ../public/* ./
-          echo "ruleset-mirror.skk.moe" > CNAME
-          git add --all .
-          git commit -m "deploy: https://github.com/SukkaW/Surge/commit/${GITHUB_SHA}"
-          git push --quiet --force origin HEAD:master
-          cd ..
-          rm -rf ./deploy-git
-          gh repo archive SukkaLab/ruleset.skk.moe --yes
-        env:
-          GH_EMAIL: ${{ secrets.GIT_EMAIL }}
-          GH_USER: ${{ secrets.GIT_USER }}
-          GH_TOKEN: ${{ secrets.GIT_TOKEN }}
-  
   compile_srs:
     needs:
       - build
@@ -346,7 +292,6 @@ jobs:
 
   remove_artifacts:
     needs:
-      - deploy_to_github_gitlab
       - compile_srs
       - release_github
       - upload_r2
