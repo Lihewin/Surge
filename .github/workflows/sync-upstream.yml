@@ -21,6 +21,10 @@ jobs:
           ref: master
           fetch-depth: 0
 
+      - name: Configure Merge Driver
+        run: |
+          git config merge.ours.driver true
+
       - name: Sync with upstream
         id: sync
         uses: aormsby/Fork-Sync-With-Upstream-action@v3.4
