@@ -34,6 +34,7 @@ jobs:
           target_sync_branch: master
           target_repo_token: ${{ secrets.GITHUB_TOKEN }}
           test_mode: false
+          upstream_pull_args: '-X theirs'
 
   trigger_build:
     needs: sync

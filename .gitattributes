@@ -1,4 +1,5 @@
 # Keep local changes to GitHub Actions workflow during fork sync
+# Non-workflow conflicts prefer upstream via CI: upstream_pull_args -X theirs in sync-upstream.yml
 # Note: This requires 'git config merge.ours.driver true' to be set in the environment
 .github/workflows/main.yml merge=ours
 .github/workflows/sync-upstream.yml merge=ours
