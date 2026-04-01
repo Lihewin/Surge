@@ -193,21 +193,23 @@ jobs:
         run: |
           TAG=$(date +'%Y%m%d%H%M%S')
           echo "TAG=${TAG}" >> $GITHUB_OUTPUT
-      - name: Create Release and Upload Assets
-        uses: softprops/action-gh-release@v2
-        with:
-          files: output/*.srs
-          tag_name: ${{ steps.set_tag.outputs.TAG }}
-          name: Release ${{ steps.set_tag.outputs.TAG }}
-          generate_release_notes: true
-      - name: Update Latest Release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: output/*.srs
-          tag_name: latest
-          name: Latest Release
-          prerelease: false
-          make_latest: true
+      - name: Create timestamp release and upload assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ steps.set_tag.outputs.TAG }}" output/*.srs \
+            --title "Release ${{ steps.set_tag.outputs.TAG }}" \
+            --generate-notes
+      - name: Update latest release and assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if gh release view latest >/dev/null 2>&1; then
+            gh release delete latest --yes
+          fi
+          gh release create latest output/*.srs \
+            --title "Latest Release" \
+            --latest
 
   upload_r2:
     needs:
