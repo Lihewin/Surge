@@ -207,10 +207,10 @@ export async function fetchForDoH(input: RequestInfo, init?: RequestInit) {
     // of its properties. init is passed separately so undici merges them itself,
     // exactly as real fetch(request, init) would — no manual header handling needed.
     input = new UndiciRequest(input.url, {
-      method: input.method,
-      headers: input.headers,
-      body: input.body,
-      signal: input.signal
+      ...input,
+      // force no-referrer to avoid about:client
+      referrerPolicy: 'no-referrer',
+      referrer: ''
     });
   }
   return $$fetch(input, init);
