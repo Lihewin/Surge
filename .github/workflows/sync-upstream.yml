@@ -7,6 +7,9 @@ on:
   repository_dispatch:
     types: [upstream_updated]
 
+permissions:
+  contents: write
+
 jobs:
   sync:
     name: Sync from Upstream
@@ -27,14 +30,48 @@ jobs:
 
       - name: Sync with upstream
         id: sync
-        uses: aormsby/Fork-Sync-With-Upstream-action@v3.4.2
-        with:
-          upstream_sync_repo: SukkaW/Surge
-          upstream_sync_branch: master
-          target_sync_branch: master
-          target_repo_token: ${{ secrets.GITHUB_TOKEN }}
-          test_mode: false
-          upstream_pull_args: '-X theirs'
+        env:
+          UPSTREAM_REPO: SukkaW/Surge
+          UPSTREAM_BRANCH: master
+        run: |
+          set -euo pipefail
+
+          git remote add upstream "https://github.com/${UPSTREAM_REPO}.git" 2>/dev/null \
+            || git remote set-url upstream "https://github.com/${UPSTREAM_REPO}.git"
+          git fetch upstream "${UPSTREAM_BRANCH}"
+
+          BEFORE="$(git rev-parse HEAD)"
+
+          if ! git merge "upstream/${UPSTREAM_BRANCH}" -X theirs --no-edit; then
+            echo "Merge failed; resolve conflicts or update .gitattributes"
+            git merge --abort 2>/dev/null || true
+            exit 1
+          fi
+
+          # Upstream-only workflows (Sukka dist infra). Fork CI stays in .gitattributes merge=ours.
+          UPSTREAM_ONLY_WORKFLOWS=(
+            .github/workflows/toggle-dist-repo-visibility.yml
+          )
+          REMOVED=0
+          for f in "${UPSTREAM_ONLY_WORKFLOWS[@]}"; do
+            if [ -e "$f" ]; then
+              git rm -f "$f"
+              REMOVED=1
+            fi
+          done
+          if [ "$REMOVED" -eq 1 ]; then
+            git commit --amend --no-edit
+          fi
+
+          AFTER="$(git rev-parse HEAD)"
+          if [ "$BEFORE" = "$AFTER" ]; then
+            echo "has_new_commits=false" >> "$GITHUB_OUTPUT"
+            echo "Already up to date with upstream."
+          else
+            git push origin HEAD:master
+            echo "has_new_commits=true" >> "$GITHUB_OUTPUT"
+            echo "Synced upstream and pushed."
+          fi
 
   trigger_build:
     needs: sync
