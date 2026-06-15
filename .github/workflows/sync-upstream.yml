@@ -45,14 +45,15 @@ jobs:
             git merge --abort 2>/dev/null || true
             exit 1
           fi
-          # Keep our fork's workflow files by reverting any upstream changes to .github/workflows/
+          # Discard all upstream changes to .github/workflows/ — keep our fork's versions
+          git rm -r --cached .github/workflows/ 2>/dev/null || true
           git checkout HEAD -- .github/workflows/
           AFTER="$(git rev-parse HEAD)"
           if [ "$BEFORE" = "$AFTER" ]; then
             echo "has_new_commits=false" >> "$GITHUB_OUTPUT"
             echo "Already up to date with upstream."
           else
-            # Amend the merge to exclude workflow changes
+            # Amend the merge commit to exclude workflow changes
             git commit --amend --no-edit
             git push origin HEAD:master
             echo "has_new_commits=true" >> "$GITHUB_OUTPUT"
