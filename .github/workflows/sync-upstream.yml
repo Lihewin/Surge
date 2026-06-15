@@ -9,7 +9,6 @@ on:
 
 permissions:
   contents: write
-  workflows: write
 
 jobs:
   sync:
@@ -36,6 +35,7 @@ jobs:
         env:
           UPSTREAM_REPO: SukkaW/Surge
           UPSTREAM_BRANCH: master
+          GIT_TOKEN: ${{ secrets.GIT_TOKEN }}
         run: |
           set -euo pipefail
           git remote add upstream "https://github.com/${UPSTREAM_REPO}.git" 2>/dev/null || git remote set-url upstream "https://github.com/${UPSTREAM_REPO}.git"
@@ -46,6 +46,7 @@ jobs:
             git merge --abort 2>/dev/null || true
             exit 1
           fi
+          # Remove upstream-only workflows that shouldn't exist in forks
           UPSTREAM_ONLY_WORKFLOWS=(
             .github/workflows/toggle-dist-repo-visibility.yml
           )
@@ -64,6 +65,8 @@ jobs:
             echo "has_new_commits=false" >> "$GITHUB_OUTPUT"
             echo "Already up to date with upstream."
           else
+            # Use GIT_TOKEN for push to allow updating workflow files
+            git remote set-url origin "https://x-access-token:${GIT_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
             git push origin HEAD:master
             echo "has_new_commits=true" >> "$GITHUB_OUTPUT"
             echo "Synced upstream and pushed."
