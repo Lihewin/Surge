@@ -9,6 +9,7 @@ on:
 
 permissions:
   contents: write
+  workflows: write
 
 jobs:
   sync:
@@ -90,9 +91,9 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             await github.rest.actions.createWorkflowDispatch({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              workflow_id: 'main.yml',
-              ref: 'master'
+                owner: context.repo.owner,
+                repo: context.rep.repo,
+                workflow_id: 'main.yml',
+                ref: 'master'
             });
             console.log('✅ Triggered main workflow');
