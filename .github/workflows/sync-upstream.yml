@@ -45,10 +45,9 @@ jobs:
             git merge --abort 2>/dev/null || true
             exit 1
           fi
-          # Keep our fork's workflow files — restore modified ones, remove new upstream ones
-          git checkout HEAD -- .github/workflows/
-          for f in $(git diff HEAD --name-only --diff-filter=A -- .github/workflows/); do
-            git rm --cached "$f"
+          git checkout "$BEFORE" -- .github/workflows/
+          for f in $(git diff "$BEFORE" --name-only --diff-filter=A -- .github/workflows/); do
+            git rm --cached "$f" 2>/dev/null || true
             rm -f "$f"
           done
           AFTER="$(git rev-parse HEAD)"
