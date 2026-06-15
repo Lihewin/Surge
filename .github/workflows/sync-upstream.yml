@@ -38,20 +38,14 @@ jobs:
           UPSTREAM_BRANCH: master
         run: |
           set -euo pipefail
-
-          git remote add upstream "https://github.com/${UPSTREAM_REPO}.git" 2>/dev/null \
-            || git remote set-url upstream "https://github.com/${UPSTREAM_REPO}.git"
+          git remote add upstream "https://github.com/${UPSTREAM_REPO}.git" 2>/dev/null || git remote set-url upstream "https://github.com/${UPSTREAM_REPO}.git"
           git fetch upstream "${UPSTREAM_BRANCH}"
-
           BEFORE="$(git rev-parse HEAD)"
-
           if ! git merge "upstream/${UPSTREAM_BRANCH}" -X theirs --no-edit; then
             echo "Merge failed; resolve conflicts or update .gitattributes"
             git merge --abort 2>/dev/null || true
             exit 1
           fi
-
-          # Upstream-only workflows (Sukka dist infra). Fork CI stays in .gitattributes merge=ours.
           UPSTREAM_ONLY_WORKFLOWS=(
             .github/workflows/toggle-dist-repo-visibility.yml
           )
@@ -65,7 +59,6 @@ jobs:
           if [ "$REMOVED" -eq 1 ]; then
             git commit --amend --no-edit
           fi
-
           AFTER="$(git rev-parse HEAD)"
           if [ "$BEFORE" = "$AFTER" ]; then
             echo "has_new_commits=false" >> "$GITHUB_OUTPUT"
@@ -92,7 +85,7 @@ jobs:
           script: |
             await github.rest.actions.createWorkflowDispatch({
                 owner: context.repo.owner,
-                repo: context.rep.repo,
+                repo: context.repo.repo,
                 workflow_id: 'main.yml',
                 ref: 'master'
             });
