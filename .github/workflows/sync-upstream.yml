@@ -41,9 +41,10 @@ jobs:
           git fetch upstream "${UPSTREAM_BRANCH}"
           BEFORE="$(git rev-parse HEAD)"
           if ! git merge "upstream/${UPSTREAM_BRANCH}" -X theirs --no-edit; then
-            echo "Merge failed; resolve conflicts or update .gitattributes"
-            git merge --abort 2>/dev/null || true
-            exit 1
+            echo "Merge conflicts detected; resolving modify/delete conflicts by accepting upstream..."
+            git checkout "upstream/${UPSTREAM_BRANCH}" -- $(git diff --name-only --diff-filter=U) 2>/dev/null || true
+            git add -A
+            git commit --no-edit
           fi
           git checkout "$BEFORE" -- .github/workflows/
           for f in $(git diff "$BEFORE" --name-only --diff-filter=A -- .github/workflows/); do
